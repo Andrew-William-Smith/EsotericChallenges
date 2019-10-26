@@ -22,7 +22,7 @@
       ******************************************************************
 
        IDENTIFICATION DIVISION.
-       PROGRAM-ID. DAILYPROGRAMMER380.
+       PROGRAM-ID. DAILYPROGRAMMER380EASY.
 
        ENVIRONMENT DIVISION.
            INPUT-OUTPUT SECTION.
