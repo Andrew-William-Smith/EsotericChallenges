@@ -45,21 +45,24 @@ def integer_type(sigil: str, digits: Word, base: int) -> Combine:
               Python ints.
     """
     return Combine(CaselessLiteral(sigil) + digits).setParseAction(
-        # Strip the sigil from the integer literal
-        lambda toks: int(toks[0][len(sigil):], base)
+        # Strip the sigil and underscores from the integer literal
+        lambda toks: int(toks[0][len(sigil):].replace('_', ''), base)
     )
 
 # Binary (base-2)
-BINARY_DIGITS = Word('01')
-BINARY_INTEGER = integer_type('0b', BINARY_DIGITS, 2)
+BINARY_DIGITS = Word('01_')
+BINARY_INTEGER = integer_type('&b', BINARY_DIGITS, 2)
 # Octal (base-8)
-OCTAL_DIGITS = Word('01234567')
-OCTAL_INTEGER = integer_type('0o', OCTAL_DIGITS, 8)
+OCTAL_DIGITS = Word('01234567_')
+OCTAL_INTEGER = integer_type('&o', OCTAL_DIGITS, 8)
 # Decimal (base-10)
-DECIMAL_INTEGER = Combine(Word('123456789', '0123456789'))
+DECIMAL_INTEGER = Combine(Word('123456789', '0123456789_')).setParseAction(
+    # Strip underscores from integer literal
+    lambda toks: toks[0].replace('_', '')
+)
 # Hexadecimal (base-16)
-HEXADECIMAL_DIGITS = Word('0123456789abcdefABCDEF')
-HEXADECIMAL_INTEGER = integer_type('0x', HEXADECIMAL_DIGITS, 16)
+HEXADECIMAL_DIGITS = Word('0123456789abcdefABCDEF_')
+HEXADECIMAL_INTEGER = integer_type('&h', HEXADECIMAL_DIGITS, 16)
 # Integers as a whole
 INTEGER_TYPE = (BINARY_INTEGER | OCTAL_INTEGER | DECIMAL_INTEGER
     | HEXADECIMAL_INTEGER)
@@ -68,9 +71,12 @@ INTEGER_LITERAL = Combine(Optional(NUMBER_SIGN) + INTEGER_TYPE).setParseAction(
 )
 
 # Floating-point
-FLOAT_DIGITS = Word('0123456789')
+FLOAT_DIGITS = Word('0123456789_')
 FLOAT_LITERAL = Combine(Optional(NUMBER_SIGN) + FLOAT_DIGITS + '.'
-    + Optional(FLOAT_DIGITS)).setParseAction(lambda toks: float(toks[0]))
+    + Optional(FLOAT_DIGITS)).setParseAction(
+        # Remove underscores from float literal
+        lambda toks: float(toks[0].replace('_', ''))
+    )
 
 NUMERIC_LITERAL = FLOAT_LITERAL | INTEGER_LITERAL
 
@@ -123,7 +129,8 @@ OPERATOR_NAMES = {
     '-': 'SUBTRACT',
     '*': 'MULTIPLY',
     '/': 'DIVIDE',
-    '\\': 'MODULO'
+    '\\': 'MODULO',
+    '^': 'EXPONENT'
 }
 
 def process_binary_operator(values: List[List[Any]]) -> dict:
@@ -152,10 +159,13 @@ OP_DIVIDE = Literal('/')
 OP_MODULO = Literal('\\')
 OP_MULTIPLICATIVE_PRECEDENCE = OP_MULTIPLY | OP_DIVIDE | OP_MODULO
 
+OP_EXPONENT = Literal('^')
+
 # Arithmetic expressions
 ARITHMETIC_ATOM = NUMERIC_LITERAL | ARRAY_IDENTIFIER | IDENTIFIER
 ARITHMETIC_EXPRESSION <<= infixNotation(ARITHMETIC_ATOM, [
     (OP_UNARY_PRECEDENCE, 1, opAssoc.RIGHT, process_unary_operator),
+    (OP_EXPONENT, 2, opAssoc.LEFT, process_binary_operator),
     (OP_MULTIPLICATIVE_PRECEDENCE, 2, opAssoc.LEFT, process_binary_operator),
     (OP_ADDITIVE_PRECEDENCE, 2, opAssoc.LEFT, process_binary_operator)
 ])
