@@ -20,9 +20,15 @@
 
 
 from pyparsing import (CaselessLiteral, Combine, Forward, Group, Keyword,
-    Literal, OneOrMore, Optional, Word, ZeroOrMore, alphas, alphanums,
-    infixNotation, opAssoc)
+    Literal, OneOrMore, Optional, ParserElement, Word, ZeroOrMore, alphas,
+    alphanums, infixNotation, opAssoc)
 from typing import Any, List
+import random
+import sys
+
+# Performance optimisation: enable Packrat parsing
+ParserElement.enablePackrat()
+
 
 ################################################################################
 # ATOM DEFINITIONS
@@ -78,8 +84,6 @@ FLOAT_LITERAL = Combine(Optional(NUMBER_SIGN) + FLOAT_DIGITS + '.'
         lambda toks: float(toks[0].replace('_', ''))
     )
 
-NUMERIC_LITERAL = FLOAT_LITERAL | INTEGER_LITERAL
-
 # Identifiers
 INTEGER_SIGIL = Literal('#')
 FLOAT_SIGIL = Literal('%')
@@ -92,6 +96,33 @@ IDENTIFIER = (Combine(OneOrMore(IDENTIFIER_SIGIL) + IDENTIFIER_NAME)
         'operation': 'LOAD',
         'id': toks[0]
     }))
+
+# Random values
+CONST_RANDOM_IDENTIFIER = Literal('?')
+CONST_RANDOM_INTEGER = (Combine(INTEGER_SIGIL + CONST_RANDOM_IDENTIFIER)
+    .setParseAction(
+        # "New" random integer: #? returns a random long
+        lambda: {
+            'operation': 'RAND_INT',
+            'min': -(sys.maxsize / 2),
+            'max': sys.maxsize / 2
+        }))
+CONST_OLD_RANDOM = CONST_RANDOM_IDENTIFIER.setParseAction(
+    # "Old" random integer: ? returns a random 16-bit integer
+    lambda: {
+        'operation': 'RAND_INT',
+        'min': -(2 ** 15),
+        'max': 2 ** 15 - 1
+    })
+CONST_RANDOM_FLOAT = (Combine(FLOAT_SIGIL + CONST_RANDOM_IDENTIFIER)
+    .setParseAction(
+        lambda: {
+            'operation': 'RAND_FLOAT'
+        }))
+
+# Construct numeric identifier
+NUMERIC_LITERAL = (CONST_RANDOM_INTEGER | CONST_RANDOM_FLOAT | CONST_OLD_RANDOM
+    | FLOAT_LITERAL | INTEGER_LITERAL)
 
 # Arrays
 ARRAY_IDENTIFIER = Forward()
@@ -116,7 +147,7 @@ def process_unary_operator(values: List[List[Any]]) -> dict:
         return operand
     # Negate result for unary minus
     return {
-        'operation': 'NEGATE',
+        'operation': 'ARITH_NEGATE' if operator == '-' else 'BOOL_INVERT',
         'value': operand
     }
 
@@ -124,31 +155,45 @@ OP_UNARY_PLUS = Literal('+')
 OP_UNARY_MINUS = Literal('-')
 OP_UNARY_PRECEDENCE = OP_UNARY_PLUS | OP_UNARY_MINUS
 
+# Mapping of binary operators -> interpreter operations
 OPERATOR_NAMES = {
-    '+': 'ADD',
-    '-': 'SUBTRACT',
-    '*': 'MULTIPLY',
-    '/': 'DIVIDE',
-    '\\': 'MODULO',
-    '^': 'EXPONENT'
+    '+': 'ARITH_ADD',
+    '-': 'ARITH_SUBTRACT',
+    '*': 'ARITH_MULTIPLY',
+    '/': 'ARITH_DIVIDE',
+    '\\': 'ARITH_MODULO',
+    '^': 'ARITH_EXPONENT',
+    '&': 'BOOL_AND',
+    '|': 'BOOL_OR',
+    '>': 'CMP_GT',
+    '>=': 'CMP_GTE',
+    '=': 'CMP_EQ',
+    '<>': 'CMP_NEQ',
+    '<=': 'CMP_LTE',
+    '<': 'CMP_LT'
 }
 
 def process_binary_operator(values: List[List[Any]]) -> dict:
     """
     Parse the specified binary operator, the result of a ParseExpression, and
-    return an operation corresponding to its function.
+    return a tree of operations corresponding to its function.
     """
-    # Separate operations and validate
-    left_operand, operator, right_operand = values[0]
-    if operator not in OPERATOR_NAMES:
-        # TODO Create syntax error class
-        raise ValueError(f'Invalid binary operator in expression: {operator}')
+    # Build the operation tree from left to right
+    values = values[0]
+    operations = values[0]
+    for op_idx in range(1, len(values), 2):
+        operator = values[op_idx]
+        if operator not in OPERATOR_NAMES:
+            # TODO: create a proper error class
+            raise ValueError(f'Unknown binary operator {operator}')
+        # Create a wrapper for this expression
+        operations = {
+            'operation': OPERATOR_NAMES[operator],
+            'left': operations,
+            'right': values[op_idx + 1]
+        }
 
-    return {
-        'operation': OPERATOR_NAMES[operator],
-        'left': left_operand,
-        'right': right_operand
-    }
+    return operations
 
 OP_ADD = Literal('+')
 OP_SUBTRACT = Literal('-')
@@ -168,4 +213,30 @@ ARITHMETIC_EXPRESSION <<= infixNotation(ARITHMETIC_ATOM, [
     (OP_EXPONENT, 2, opAssoc.LEFT, process_binary_operator),
     (OP_MULTIPLICATIVE_PRECEDENCE, 2, opAssoc.LEFT, process_binary_operator),
     (OP_ADDITIVE_PRECEDENCE, 2, opAssoc.LEFT, process_binary_operator)
+])
+
+# Boolean expressions
+# Operators
+OP_BOOLEAN_NOT = Literal('!')
+OP_BOOLEAN_AND = Literal('&')
+OP_BOOLEAN_OR = Literal('|')
+
+# Comparators
+OP_GREATER_THAN = Literal('>')
+OP_GREATER_THAN_EQUAL = Literal('>=')
+OP_EQUAL = Literal('=')
+OP_NOT_EQUAL = Literal('<>')
+OP_LESS_THAN_EQUAL = Literal('<=')
+OP_LESS_THAN = Literal('<')
+OP_COMPARE_MAGNITUDE = (OP_GREATER_THAN_EQUAL | OP_LESS_THAN_EQUAL
+    | OP_GREATER_THAN | OP_LESS_THAN)
+OP_COMPARE_VALUE = OP_EQUAL | OP_NOT_EQUAL
+
+# Comparisons (using C operator precedence)
+BOOLEAN_EXPRESSION = infixNotation(ARITHMETIC_EXPRESSION, [
+    (OP_BOOLEAN_NOT, 1, opAssoc.RIGHT, process_unary_operator),
+    (OP_COMPARE_MAGNITUDE, 2, opAssoc.LEFT, process_binary_operator),
+    (OP_COMPARE_VALUE, 2, opAssoc.LEFT, process_binary_operator),
+    (OP_BOOLEAN_AND, 2, opAssoc.LEFT, process_binary_operator),
+    (OP_BOOLEAN_OR, 2, opAssoc.LEFT, process_binary_operator)
 ])
