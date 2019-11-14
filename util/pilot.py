@@ -228,15 +228,14 @@ OP_EQUAL = Literal('=')
 OP_NOT_EQUAL = Literal('<>')
 OP_LESS_THAN_EQUAL = Literal('<=')
 OP_LESS_THAN = Literal('<')
-OP_COMPARE_MAGNITUDE = (OP_GREATER_THAN_EQUAL | OP_LESS_THAN_EQUAL
-    | OP_GREATER_THAN | OP_LESS_THAN)
-OP_COMPARE_VALUE = OP_EQUAL | OP_NOT_EQUAL
+OP_COMPARE = (OP_EQUAL | OP_NOT_EQUAL | OP_GREATER_THAN_EQUAL
+    | OP_LESS_THAN_EQUAL | OP_GREATER_THAN | OP_LESS_THAN)
 
 # Comparisons (using C operator precedence)
-BOOLEAN_EXPRESSION = infixNotation(ARITHMETIC_EXPRESSION, [
+COMPARISON_EXPRESSION = Group(ARITHMETIC_EXPRESSION + Optional(OP_COMPARE
+    + ARITHMETIC_EXPRESSION)).setParseAction(process_binary_operator)
+BOOLEAN_EXPRESSION = infixNotation(COMPARISON_EXPRESSION, [
     (OP_BOOLEAN_NOT, 1, opAssoc.RIGHT, process_unary_operator),
-    (OP_COMPARE_MAGNITUDE, 2, opAssoc.LEFT, process_binary_operator),
-    (OP_COMPARE_VALUE, 2, opAssoc.LEFT, process_binary_operator),
     (OP_BOOLEAN_AND, 2, opAssoc.LEFT, process_binary_operator),
     (OP_BOOLEAN_OR, 2, opAssoc.LEFT, process_binary_operator)
 ])
